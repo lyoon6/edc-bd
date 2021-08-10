@@ -1,0 +1,189 @@
+---
+title: 'Aim 1: Model checks'
+author: "Lara Yoon"
+date: "6/1/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/laray/Box/Projects/2020-Dissertation/Analysis')
+
+#In your code chunk, use echo=TRUE to display the code, message=FALSE to suppress messages, warning=FALSE to suppress warning, and include = FALSE to prevent code and results from appearing in the finished file.
+```
+
+## Setup 
+
+```{r packages, include = FALSE}
+pacman::p_load(devtools,here,BiocManager, dagitty,
+               tidyverse, reshape2, janitor, knitr, kableExtra,
+               tableone, readxl, corrplot, writexl, readr,
+               rmcorr, geepack, ggplot2, sjstats, psych, 
+               ggpubr, ggsci, lme4, corrr, irr, ICC.Sample.Size, ICC,
+               Hmisc, mice, psych, DescTools, RColorBrewer, 
+               sjPlot, sjmisc, psycho, lsmeans, lmerTest, 
+               emmeans, jtools, ggfortify, viridis, ggthemes, ggalt, car)
+pacman::p_loaded()
+```
+
+```{r data, message=FALSE, results = FALSE, warning=FALSE}
+# Import data from file "Aim1_EDC-BD_Setup.RMD" 
+load(file = "Data/FinalData/dat2.Rdata")
+
+# Separate into time-specific data for later analyses 
+b1dat <- dat2 %>%  
+  filter(moments=="b1")
+b4dat <- dat2 %>%  
+  filter(moments=="b4") 
+pm1dat <- dat2 %>%  
+  filter(moments=="pm1")
+
+
+```
+
+## Variables 
+
+The distributions for breast outcomes and their respective log transformations are plotted below. The original values are right skewed and bounded on the left by 0. The log transformations are more symmetrical, though we could argue that %FGV has a similarly symmetric distribution pre- and post- transformation. 
+We will use log-transformed breast outcomes. 
+
+```{r vars, warning=FALSE}
+set.seed(801)
+
+## Breast outcomes 
+gather(dat2, variable, value, DXA_FGVpercent, DXA_FGVabsolute, DXA_Volume, log_pFGV, log_aFGV, log_tBV) %>%
+  mutate(variable = factor(variable, levels = c("DXA_FGVpercent", "DXA_FGVabsolute",  "DXA_Volume", "log_pFGV", "log_aFGV", "log_tBV"))) %>%
+  ggplot(aes(x = value, fill = variable)) +
+    geom_bkde() +
+    geom_rug() +
+    scale_fill_viridis(guide = FALSE, discrete = TRUE) +
+    facet_wrap(~variable, scales = "free") +
+    theme_base() + 
+  labs(title="Breast Outcomes")
+```
+
+## Linearity 
+
+Is the association between EDC and BD linear? We can plot the data below using BPA as our EDC example and absolute FGV as our breat outcome. 
+
+In the plots of the non-log-transformed variables, we have outliers and a clear non-linear relation. 
+
+There are a few points with higher leverage, suggesting we might have xoutliers with potential to influence our coefficients. When we look at the Cook's Distance plot, we see that observations fall around 0.06 or below, suggesting little influence on fitted values. 
+
+
+```{r linearity, warning=FALSE}
+
+# unlog bpa 
+b1dat$bpa <- 10^(b1dat$log_bpa)
+
+# Plot linear regression line and loess smoother 
+ggplot(b1dat, aes(x = bpa, y = DXA_FGVabsolute)) +
+    geom_jitter() +
+    geom_smooth(method = "lm", color = viridis(1, begin = 1),   se = FALSE) +
+    geom_smooth(span   = 1,    color = viridis(1, begin = 0.6), se = FALSE, linetype = "dashed") +
+    theme_base()
+
+# Get linear regression outputs 
+lr <- lm(DXA_FGVabsolute ~ bpa, b1dat)
+summary(lr)
+
+# Diagnostic plots 
+autoplot(lr, which = 1:6, ncol=3, label.size=3)
+```
+
+## Log-Log linear regression
+
+When we plot the log-log regression, we see that the outliers are no longer there in the log-log space.  
+
+We can also see that in the QQ plot, the residuals generally fall on the line suggesting approximately normal distribution. Further, the residuals are generally evenly distributed in the plot of residuals by fitted values. 
+
+```{r loglog, warning=FALSE}
+
+# Plot log-transformed relation 
+ggplot(b1dat, aes(x = log_bpa, y = log_aFGV, group)) +
+    geom_jitter(alpha = 0.5) +
+    geom_smooth(method = "lm", color = viridis(1, begin = 1),   se = FALSE) +
+    geom_smooth(span   = 1,    color = viridis(1, begin = 0.6), se = FALSE, 
+                linetype = "dashed") +
+    theme_base()
+
+# Get linear regression 
+logloglr <- lm(log_aFGV ~ log_bpa, b1dat)
+summary(logloglr)
+
+# Diagnostic plots 
+autoplot(logloglr, which = 1:6, ncol=3, label.size=3)
+
+```
+
+## Plot results in original scales 
+
+We can add the line from the log-log regression model in our original space. 
+
+Interestingly, for the particular combination of X & Y, there does not appear to be large differences in the regression lines (compare yellow vs purple).
+
+```{r resid orig, warning=FALSE}
+
+ggplot(b1dat, aes(x = bpa, y = DXA_FGVabsolute)) +
+    geom_jitter() +
+    geom_smooth(method = "lm", color = viridis(1, begin = 1), se = FALSE, linetype = "dashed") +
+   geom_line(data = data.frame(x = 10^(logloglr$model$log_bpa),
+                                y = 10^(predict(logloglr))),
+              aes(x = x, y = y),
+              color = viridis(1, end = 0), size = 0.7) +
+    geom_smooth(span = 1, color = viridis(1, begin = 0.6), size = 0.7, linetype = "dashed", se = FALSE) +
+    theme_base()
+
+```
+
+
+## Examining other combinations 
+
+In general the residuals look at lot better with the log-log transformation. 
+
+In most of these examples, we can really see the influence of certain influential points in the non log scale. 
+
+```{r other, warning=FALSE}
+# unlog bpa 
+b1dat$mepb <- 10^(b1dat$log_mepb)
+
+# Plot linear regression line and loess smoother 
+ggplot(b1dat, aes(x = mepb, y = DXA_FGVpercent)) +
+    geom_jitter() +
+    geom_smooth(method = "lm", color = viridis(1, begin = 1),   se = FALSE) +
+    geom_smooth(span   = 1,    color = viridis(1, begin = 0.6), se = FALSE, linetype = "dashed") +
+    theme_base()
+
+# Get linear regression outputs 
+lr <- lm(DXA_FGVpercent ~ mepb, b1dat)
+summary(lr)
+
+# Diagnostic plots 
+autoplot(lr, which = 1:6, ncol=3, label.size=3)
+
+# Plot log-transformed relation 
+ggplot(b1dat, aes(x = log_mepb, y = log_pFGV, group)) +
+    geom_jitter(alpha = 0.5) +
+    geom_smooth(method = "lm", color = viridis(1, begin = 1),   se = FALSE) +
+    geom_smooth(span   = 1,    color = viridis(1, begin = 0.6), se = FALSE, 
+                linetype = "dashed") +
+    theme_base()
+
+# Get linear regression 
+logloglr <- lm(log_pFGV ~ log_mepb, b1dat)
+summary(logloglr)
+
+# Diagnostic plots 
+autoplot(logloglr, which = 1:6, ncol=3, label.size=3)
+
+
+# Plot both lines
+ggplot(b1dat, aes(x = mepb, y = DXA_FGVpercent)) +
+    geom_jitter() +
+    geom_smooth(method = "lm", color = viridis(1, begin = 1), se = FALSE, linetype = "dashed") +
+   geom_line(data = data.frame(x = 10^(logloglr$model$log_mepb),
+                                y = 10^(predict(logloglr))),
+              aes(x = x, y = y),
+              color = viridis(1, end = 0), size = 0.7) +
+    geom_smooth(span = 1, color = viridis(1, begin = 0.6), size = 0.7, linetype = "dashed", se = FALSE) +
+    theme_base()
+```

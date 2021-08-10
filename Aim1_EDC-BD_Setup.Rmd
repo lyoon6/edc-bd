@@ -1,0 +1,832 @@
+---
+title: "[Aim 1] Evaluating the impact of endocrine-disrupting chemicals on breast density- An update"
+author: "Lara Yoon"
+date: "7/13/2021"
+output: 
+  html_document: 
+    toc: true
+    toc_float: true 
+---
+
+R markdown file for EDC-BD analysis setup. Includes descriptive analyses of our EDCs, breast density measurements, and covariates. 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/laray/Box/Projects/2020-Dissertation/Analysis')
+
+#In your code chunk, use echo=TRUE to display the code, message=FALSE to suppress messages, warning=FALSE to suppress warning, and include = FALSE to prevent code and results from appearing in the finished file.
+```
+
+## Setup 
+
+```{r packages, include = FALSE}
+pacman::p_load(devtools,here,BiocManager, 
+               tidyverse, reshape2, janitor, knitr, kableExtra,
+               tableone, readxl, corrplot, writexl,
+               rmcorr, geepack, ggplot2, sjstats, psych, 
+               ggpubr, ggsci, lme4, corrr, irr, ICC.Sample.Size, ICC,
+               Hmisc, mice, psych, DescTools, RColorBrewer, 
+               sjPlot, sjmisc, psycho, lsmeans, lmerTest, ggfortify, viridis, ggthemes, ggalt, car)
+pacman::p_loaded()
+```
+
+```{r data, message=FALSE, results = FALSE, warning=FALSE}
+# Import cleaned data
+dat <- read_csv("Data/FinalData/AIM1_EDC_BD.csv")
+
+# Tidy 
+dat1 <- dat %>%  
+  select(-c("X1")) %>%  
+  mutate(menarche=ifelse(age_men<age, 1, 0)) %>%  
+  mutate(log_dehp = log10(mol_dehp), 
+         log_hiphth = log10(mol_hi_phth), 
+         log_lophth = log10(mol_lo_phth), 
+         log_parbf = log10(mol_parbf), 
+         log_phenf = log10(mol_phenf))
+
+myfactvars <- c("chear_pid","lab", "moments", "bfeedcat", "fatcat", "fatcat_2pm","birth_mode", "menarche", "medu", "urine_b1", "urine_b4", "urine_1pm", "bd_2pm", "stool")
+dat1[,myfactvars] <- lapply(dat1[,myfactvars], factor)
+```
+
+## EDC Summaries
+
+Here we review the EDCs used in our analyses. 
+
+Note that for analytic purposes the following EDCs were dropped: BPF, BUPB, TCC. These analytes were < 50% detected and/or ICC <.75 from overlapping CDC/CHEAR samples (n=40). There are 16 total EDCs. 
+
+We also created 5 summed groups: DEHP metabolites (mecpp + mehhp + meohp + mehp), low molecular weight phthlates (mep + mibp + mbp), high molecular weight phthalates (mbzp + mcpp + mecpp + mehhp + mehp + meohp), parabens (mepb + etpb + prpb), and phenols (bpa + bps + bp3 + tcs). These groups were creating by summing the molar concentrations (metabolite concentration divided by molar mass) of the EDCs. 
+
+### Boxplots 
+
+Phthalate, phenol, and parabens were measured in urine samples at Tanner breast stages B1, B4, and 1year post-menarche. Concentrations were standardized by lab (CDC & CHEAR), with CHEAR as the reference. We also grouped phthalates with multiple measured metabolites to parent phthalate or molecular weight group by dividing each metabolite of a single parent by its molecular weight and then summing across metabolites. For example, we calculated the molar sum of DEHP metabolites (ΣDEHP) by dividing each metabolite concentration by its molar mass and then summing the individual concentrations: [MEHHP × (1/294.35)] + MEHP × (1/278.34)] + [MECPP × (1/308.33)] + [MEOHP × (1/292.33)]. The same was done for high molecular weight phthalates (MBZP, MCPP, MECPP, MEHHP, MEHP, MEOHP), low molecular weight phthalates (MEP, MIBP, MBP), phenols, and parabens. 
+
+All concentrations are log transformed. 
+
+```{r edc box plot, message=FALSE}
+# Lists of EDC by type 
+list.edc <- c("log_bp3", "log_bpa", "log_bps", "log_tcs", "log_mepb", "log_etpb", "log_prpb", "log_mbp", "log_mbzp", "log_mcpp", "log_mecpp","log_mehhp",  "log_mehp", "log_meohp", "log_mep", "log_mibp", "log_dehp", "log_hiphth", "log_lophth", "log_parbf", "log_phenf")
+
+list.phth <- c("log_mbp", "log_mbzp", "log_mcpp", "log_mecpp","log_mehhp", "log_mehp", "log_meohp", "log_mep", "log_mibp")
+list.phen <- c("log_bp3", "log_bpa", "log_bps", "log_tcs" )
+list.parb <- c("log_mepb", "log_etpb", "log_prpb")
+list.agg <- c("log_dehp", "log_hiphth", "log_lophth", "log_parbf", "log_phenf")
+
+# Transforming to long data 
+edclongphth <- reshape2::melt(dat1, id.vars=c("chear_pid", "moments"), measure.vars=list.phth)
+edclongphen <- reshape2::melt(dat1, id.vars=c("chear_pid", "moments"), measure.vars=list.phen)
+edclongparb <- reshape2::melt(dat1, id.vars=c("chear_pid", "moments"), measure.vars=list.parb)
+edclongagg <- reshape2::melt(dat1, id.vars=c("chear_pid", "moments"), measure.vars=list.agg)
+
+# Box plots 
+box.phth <- ggplot(edclongphth, aes(x=moments, y=value, fill=moments)) + 
+  geom_boxplot() + 
+  facet_grid(.~variable) +
+  theme_bw()+
+  scale_colour_npg() + 
+  scale_fill_npg() + 
+  xlab("EDC") + 
+  ylab("Concentration (log(ng/ml)") + 
+  ggtitle("Urine Concentrations of Phthalate EDCs by Tanner Stage")+
+  theme(axis.text.x=element_text(angle=45, hjust=1)) + 
+  theme(legend.position="bottom")
+box.phth
+
+box.phen <- ggplot(edclongphen, aes(x=moments, y=value, fill=moments)) + 
+  geom_boxplot() + 
+  facet_grid(.~variable) +
+  theme_bw()+
+  scale_colour_npg() + 
+  scale_fill_npg() + 
+  xlab("EDC") + 
+  ylab("Concentration (log(ng/ml)") + 
+  ggtitle("Urine Concentrations of Phenol EDCs by Tanner Stage")+
+  theme(axis.text.x=element_text(angle=45, hjust=1)) + 
+  theme(legend.position="bottom")
+box.phen
+
+box.parb <- ggplot(edclongparb, aes(x=moments, y=value, fill=moments)) + 
+  geom_boxplot() + 
+  facet_grid(.~variable) +
+  theme_bw()+
+  scale_colour_npg() + 
+  scale_fill_npg() + 
+  xlab("EDC") + 
+  ylab("Concentration (log(ng/ml)") + 
+  ggtitle("Urine Concentrations of Paraben EDCs by Tanner Stage")+
+  theme(axis.text.x=element_text(angle=45, hjust=1)) + 
+  theme(legend.position="bottom")
+box.parb
+
+box.agg <- ggplot(edclongagg, aes(x=moments, y=value, fill=moments)) + 
+  geom_boxplot() + 
+  facet_grid(.~variable) +
+  theme_bw()+
+  scale_colour_npg() + 
+  scale_fill_npg() + 
+  xlab("EDC") + 
+  ylab("Concentration (log(nMol)") + 
+  ggtitle("Urine Concentrations of Phthalate Group EDCs by Tanner Stage")+
+  theme(axis.text.x=element_text(angle=45, hjust=1)) + 
+  theme(legend.position="bottom")
+box.agg
+
+# Save boxplots 
+ggsave("box_phth.png", plot=box.phth, path="Output/Aim1/07132021/", dpi=800)
+ggsave("box_phen.png", plot=box.phen, path="Output/Aim1/07132021/", dpi=800)
+ggsave("box_parb.png", plot=box.parb, path="Output/Aim1/07132021/", dpi=800)
+ggsave("box_agg.png", plot=box.agg, path="Output/Aim1/07132021/", dpi=800)
+
+```
+
+
+### Creatinine 
+
+We collected fasting spot urine samples to measure our EDCs. We also measured creatinine, a metabolite of cretine, to enable correction for hydration. In general, dividing chemical concentrations by creatinine can account for variability due to urinary dilution. 
+
+Literature suggests two methods for dealing with creatinine: 
+
+1. For univariate analyses, we can correct for creatinine using formula adjustment method (i.e., classical standardization: urinary exposure concentration divided by creatinine concentration) 
+
+2. For regression modeling of a EDC-disease relation, we can control for creatinine by including it as a covariate in the regression model. Some have argued that the classical approach can induce bias when covariates (e.g., age, BMI) are related to creatinine and disease. 
+
+
+See: Barr (2005), Fergusun (2014), O'Brien (2017)
+
+
+Our biomarkers are measured in units of ng/ml; creatinine, mg/dl. Recall that 1 ng/ml = 0.0001 mg/dL ; 10000 ng/mL = 1 mg/dl. 
+
+To adjust our biomarkers using the classical approach: 
+
+1. Convert EDC to g/L: EDC*1e-6 
+
+2. Convert CRE to g/L: CRE*1e-2
+
+3. Divide EDC/CRE : unitless
+
+4. Multiply by 1e6: ug/g Cre
+
+EDC creatinine-adjusted concentrations are expressed as microgram per gram creatinine. 
+
+
+
+```{r cre} 
+
+# Plotting creatinine 
+crelong <- reshape2::melt(dat1, id.vars=c("chear_pid", "moments"), measure.vars="cre") 
+crelong <- crelong %>% dplyr::rename("creval"="value") %>%  select(-c("variable"))
+ggplot(crelong, aes(x=moments, y=creval, fill=moments)) + 
+  geom_boxplot() + 
+  scale_fill_npg() + 
+  xlab("Creatinine") + 
+  ylab("Concentration (mg/dL)") + 
+  ggtitle("Urine Concentrations of Creatinine by Tanner Stage")+
+  theme(axis.text.x=element_text(angle=45, hjust=1)) + 
+  theme(legend.position="bottom")
+
+ggplot(dat1, aes(x=cre)) + 
+  geom_density(fill="lightblue") + 
+  ggtitle("Density plot of creatinine")
+ggplot(dat1, aes(x=log_cre)) + 
+  geom_density(fill="lightblue")+ 
+  ggtitle("Density plot of log-transformed creatinine")
+
+
+# Creatinine adjustment 
+list.edc <- c("log_bp3", "log_bpa", "log_bps", "log_tcs", "log_mepb", "log_etpb", "log_prpb", "log_mbp", "log_mcpp", "log_mecpp","log_mehhp",  "log_mehp", "log_meohp", "log_mep", "log_mibp", "log_dehp", "log_hiphth", "log_lophth", "log_parbf", "log_phenf")
+
+edclong <- reshape2::melt(dat1, id.vars=c("chear_pid", "moments"), measure.vars=list.edc)
+edclong$disvalue <- 10^(edclong$value) # undo log 
+edccre <- merge(edclong, crelong, by=c("chear_pid", "moments")) 
+edccre$creadj <- ((edccre$disvalue*1e-6)/(edccre$creval*1e-2))*1e6
+edccre$logcreadj <- log10(edccre$creadj)
+edccre$variable <- as.character(edccre$variable)
+edccre$edc <- substring(edccre$variable,5,nchar(edccre$variable))
+edccre_wide1 <- reshape2::dcast(edccre, chear_pid +  moments ~ edc, value.var ="creadj")
+edccre_wide2 <- reshape2::dcast(edccre, chear_pid +  moments ~ edc, value.var ="logcreadj")
+edcdis_wide <- reshape2::dcast(edccre, chear_pid +  moments ~ edc, value.var ="disvalue")
+colnames(edccre_wide1)[3:23] <- paste("cre__", colnames(edccre_wide1[,c(3:23)]), sep = "")
+colnames(edccre_wide2)[3:23] <- paste("cre_log_", colnames(edccre_wide2[,c(3:23)]), sep = "")
+colnames(edcdis_wide)[3:23] <- paste("dis_", colnames(edcdis_wide[,c(3:23)]), sep = "")
+
+# Merge back in with dat 
+dat2 <- dat1 %>%  
+  left_join(edccre_wide1, by=c("chear_pid", "moments")) %>%  
+  left_join(edccre_wide2, by=c("chear_pid", "moments")) %>%  
+  left_join(edcdis_wide, by=c("chear_pid", "moments"))
+
+```
+
+
+
+### Geometric Means 
+
+We back-transformed the means to the original scale to obtain the geometric means for each EDC. The geometric mean can dampen the influence of very high or low concentrations. (The geometric mean is the nth root of n products.)
+
+Here, we report both the unadjusted and the creatinine adjusted values. 
+
+Note that the geometric mean concentrations appear to be decreasing over time. 
+
+```{r geo mean, warning=FALSE,  message=FALSE}
+# List of creatinine-adjusted 
+list.edc.cre <- c("cre__bp3", "cre__bpa", "cre__bps", "cre__tcs", "cre__mepb", "cre__etpb", "cre__prpb", "cre__mbp", "cre__mbzp", "cre__mcpp", "cre__mecpp","cre__mehhp",  "cre__mehp", "cre__meohp", "cre__mep", "cre__mibp", "cre__dehp", "cre__hiphth", "cre__lophth", "cre__parbf", "cre__phenf")
+
+# Get matrices by Tanner stage
+dat.geo.b1 <- dat2 %>%  
+  filter(moments=="b1") %>%  
+  select(starts_with("cre__")) %>%  
+  drop_na
+dat.geo.b4 <- dat2 %>%  
+  filter(moments=="b4") %>%  
+  select(starts_with("cre__")) %>%  
+  drop_na
+dat.geo.pm1 <- dat2 %>%  
+  filter(moments=="pm1") %>%  
+  select(starts_with("cre__")) %>%  
+  drop_na
+
+# Get geometric means & 95% CI (Use Gmean from DescTools package)
+gmean.b1 <- as.data.frame(sapply(as.data.frame(dat.geo.b1), Gmean, conf.level=0.95, na.rm=TRUE))
+gmean.b4 <- as.data.frame(sapply(as.data.frame(dat.geo.b4), Gmean, conf.level=0.95, na.rm=TRUE))
+gmean.1pm <- as.data.frame(sapply(as.data.frame(dat.geo.pm1), Gmean, conf.level=0.95, na.rm=TRUE))
+
+# Make table
+gmean.b1 <- as.data.frame(t(gmean.b1))
+gmean.b1$EDC <- rownames(gmean.b1)
+gmean.b1 <- dplyr::rename(gmean.b1, "mean_b1"="mean", "lwr.ci_b1"="lwr.ci", "upr.ci_b1"="upr.ci")
+gmean.b4 <- as.data.frame(t(gmean.b4))
+gmean.b4$EDC <- rownames(gmean.b4)
+gmean.b4 <- dplyr::rename(gmean.b4, "mean_b4"="mean", "lwr.ci_b4"="lwr.ci", "upr.ci_b4"="upr.ci")
+gmean.1pm <- as.data.frame(t(gmean.1pm))
+gmean.1pm$EDC <- rownames(gmean.1pm)
+gmean.1pm <- dplyr::rename(gmean.1pm, "mean_1pm"="mean", "lwr.ci_1pm"="lwr.ci", "upr.ci_1pm"="upr.ci")
+
+gmeanall <- gmean.b1 %>%  
+  full_join(gmean.b4, by="EDC") %>%  
+  full_join(gmean.1pm, by="EDC") %>%  
+  select("EDC", everything()) %>%  
+  mutate(across(where(is.numeric), round, 2))
+
+gmeantable <- kable(gmeanall, 
+                    col.names= c("EDC", "Geometric Mean (B1)", "Lower 95% CI (B1)", "Upper 95% CI (B1)", 
+                                 "Geometric Mean (B4)", "Lower 95% CI (B4)", "Upper 95% CI (B4)", 
+                                 "Geometric Mean 1YPM", "Lower 95% CI (1YPM)", "Upper 95% CI (1YPM)"), 
+                    caption = "Table of Geometric Means for EDCs by Tanner Stage(Cr-Unadjusted)", 
+                    digits=3)
+gmeantable
+
+# Testing other functions 
+#10^mean(dat2$log_bpa, na.rm=TRUE) #manual calculation
+#MeanCI(dat2$geo_log_bpa, na.rm=TRUE)
+#geometric.mean(dat2$geo_log_bpa)
+#Gmean(dat2$geo_log_bpa, conf.level = 0.95, na.rm=TRUE)
+
+
+# Save table for later formatting 
+write.csv(gmeanall, "Output/Aim1/07132021/geomeans.csv")
+
+
+## No adjustment 
+list.edc.dis<- c("dis_bp3", "dis_bpa", "dis_bps", "dis_tcs", "dis_mepb", "dis_etpb", "dis_prpb", "dis_mbp", "dis_mbzp", "dis_mcpp", "dis_mecpp","dis_mehhp",  "dis_mehp", "dis_meohp", "dis_mep", "dis_mibp", "dis_dehp", "dis_hiphth", "dis_lophth", "dis_parbf", "dis_phenf")
+
+# Get matrices by Tanner stage
+dat.geo2.b1 <- dat2 %>%  
+  filter(moments=="b1") %>%  
+  select(starts_with("dis_")) %>%  
+  drop_na
+dat.geo2.b4 <- dat2 %>%  
+  filter(moments=="b4") %>%  
+  select(starts_with("dis_")) %>%  
+  drop_na
+dat.geo2.pm1 <- dat2 %>%  
+  filter(moments=="pm1") %>%  
+  select(starts_with("dis_")) %>%  
+  drop_na
+
+# Get geometric means & 95% CI (Use Gmean from DescTools package)
+gmean2.b1 <- as.data.frame(sapply(as.data.frame(dat.geo2.b1), Gmean, conf.level=0.95, na.rm=TRUE))
+gmean2.b4 <- as.data.frame(sapply(as.data.frame(dat.geo2.b4), Gmean, conf.level=0.95, na.rm=TRUE))
+gmean2.1pm <- as.data.frame(sapply(as.data.frame(dat.geo2.pm1), Gmean, conf.level=0.95, na.rm=TRUE))
+
+# Make table
+gmean2.b1 <- as.data.frame(t(gmean2.b1))
+gmean2.b1$EDC <- rownames(gmean2.b1)
+gmean2.b1 <- dplyr::rename(gmean2.b1, "mean_b1"="mean", "lwr.ci_b1"="lwr.ci", "upr.ci_b1"="upr.ci")
+gmean2.b4 <- as.data.frame(t(gmean2.b4))
+gmean2.b4$EDC <- rownames(gmean2.b4)
+gmean2.b4 <- dplyr::rename(gmean2.b4, "mean_b4"="mean", "lwr.ci_b4"="lwr.ci", "upr.ci_b4"="upr.ci")
+gmean2.1pm <- as.data.frame(t(gmean2.1pm))
+gmean2.1pm$EDC <- rownames(gmean2.1pm)
+gmean2.1pm <- dplyr::rename(gmean2.1pm, "mean_1pm"="mean", "lwr.ci_1pm"="lwr.ci", "upr.ci_1pm"="upr.ci")
+
+gmeanall2 <- gmean2.b1 %>%  
+  full_join(gmean2.b4, by="EDC") %>%  
+  full_join(gmean2.1pm, by="EDC") %>%  
+  select("EDC", everything()) %>%  
+  mutate(across(where(is.numeric), round, 2))
+
+gmeantable2 <- kable(gmeanall2, 
+                    col.names= c("EDC", "Geometric Mean (B1)", "Lower 95% CI (B1)", "Upper 95% CI (B1)", 
+                                 "Geometric Mean (B4)", "Lower 95% CI (B4)", "Upper 95% CI (B4)", 
+                                 "Geometric Mean 1YPM", "Lower 95% CI (1YPM)", "Upper 95% CI (1YPM)"), 
+                    caption = "Table of Geometric Means for EDCs by Tanner Stage (Unadjusted)", 
+                    digits=3)
+gmeantable2
+
+# Testing other functions 
+#10^mean(dat2$log_bpa, na.rm=TRUE) #manual calculation
+#MeanCI(dat2$geo_log_bpa, na.rm=TRUE)
+#geometric.mean(dat2$geo_log_bpa)
+#Gmean(dat2$geo_log_bpa, conf.level = 0.95, na.rm=TRUE)
+
+
+# Save table for later formatting 
+write.csv(gmeanall, "Output/Aim1/07132021/geomeans_cradj.csv")
+write.csv(gmeanall2, "Output/Aim1/07132021/geomeans_unadj.csv")
+
+```
+
+### Correlations
+
+We plotted pairwise EDC biomarker correlations (Spearman) at B1, B4, and 1YPM in our cohort. 
+
+``` {r corr,  message=FALSE}
+
+list.edc.cre <- c("cre_log_bp3", "cre_log_bpa", "cre_log_bps", "cre_log_tcs", "cre_log_mepb", "cre_log_etpb", "cre_log_prpb", "cre_log_mbp", "cre_log_mcpp", "cre_log_mecpp","cre_log_mehhp",  "cre_log_mehp", "cre_log_meohp", "cre_log_mep", "cre_log_mibp", "cre_log_dehp", "cre_log_hiphth", "cre_log_lophth", "cre_log_parbf", "cre_log_phenf")
+
+
+# Create subsets of the data 
+corrb1 <- dat2 %>%  
+  filter(moments=="b1") %>%  
+  select(all_of(list.edc.cre)) %>%  
+  rename_all(~stringr::str_replace(.,"^cre_log_", ""))
+corrb4 <- dat2 %>%  
+  filter(moments=="b4") %>%  
+  select(all_of(list.edc.cre)) %>%  
+  rename_all(~stringr::str_replace(.,"^cre_log_", ""))
+corrpm1 <- dat2 %>%  
+  filter(moments=="pm1") %>%  
+  select(all_of(list.edc.cre)) %>%  
+  rename_all(~stringr::str_replace(.,"^cre_log_", ""))
+
+# Calculating Spearman correlations 
+res1<- cor(corrb1,method="spearman", use="complete.obs")
+res2<- cor(corrb4,method="spearman", use="complete.obs")
+res3<- cor(corrpm1,method="spearman", use="complete.obs")
+
+# Plotting 
+title1 <- "Spearman Correlation, B1 (Cr-adjusted)"
+title2 <- "Spearman Correlation, B4 (Cr-adjusted)"
+title3 <- "Spearman Correlation, 1Y PM (Cr-adjusted)"
+
+corrplot(res1,method="circle",type="upper",
+         diag=FALSE, 
+         col=brewer.pal(n=8, name="RdBu"), 
+         addgrid.col="grey",
+         tl.col="black",tl.cex=.8, 
+         title=title1,
+         mar=c(0,0,1,0))
+corrplot(res2,method="circle",type="upper",
+         diag=FALSE, 
+         col=brewer.pal(n=8, name="RdBu"), 
+         addgrid.col="grey",
+         tl.col="black",tl.cex=.8, 
+         title=title2,
+         mar=c(0,0,1,0))
+corrplot(res3,method="circle",type="upper",
+         diag=FALSE, 
+         col=brewer.pal(n=8, name="RdBu"), 
+         addgrid.col="grey",
+         tl.col="black",tl.cex=.8, 
+         title=title3,
+         mar=c(0,0,1,0))
+```
+
+
+```{r save corrs, include=FALSE}
+# Save corr matrices (corrplot is not ggplot compatible)
+png(height=800, width=800, file="Output/Aim1/07132021/corr_b1_nombzp.png", type = "cairo")
+corrplot(res1,method="circle",type="upper",
+         diag=FALSE, 
+         col=brewer.pal(n=8, name="RdBu"), 
+         addgrid.col="grey",
+         tl.col="black",tl.cex=.8, 
+         title=title1,
+         mar=c(0,0,1,0))
+dev.off
+png(height=800, width=800, file="Output/Aim1/07132021/corr_b4_nombzp.png", type = "cairo")
+corrplot(res2,method="circle",type="upper",
+         diag=FALSE, 
+         col=brewer.pal(n=8, name="RdBu"), 
+         addgrid.col="grey",
+         tl.col="black",tl.cex=.8, 
+         title=title2,
+         mar=c(0,0,1,0))
+dev.off
+png(height=800, width=800, file="Output/Aim1/07132021/corr_1pm_nombzp.png", type = "cairo")
+corrplot(res3,method="circle",type="upper",
+         diag=FALSE, 
+         col=brewer.pal(n=8, name="RdBu"), 
+         addgrid.col="grey",
+         tl.col="black",tl.cex=.8, 
+         title=title3,
+         mar=c(0,0,1,0))
+dev.off
+```
+
+
+### Intraclass correlation
+
+To examine temporal variability in EDC levels by subject, intraclass correlation coefficients (ICC) and 95% confidence intervals were calculated. 
+
+The ICC can be used as a reliability coefficient for continuous biomarkers and includes any  systematic difference between timepoints as part of E (the subject specific error that varies from subject to subject). The ICC is usually calculated as inter-individual variance divided by the total variance (i.e., sum of intra- and inter-individual variance). 
+
+Robust ICC calculations require that: 
+1.	The underlying data are normally distributed 
+2.	Repeat measures represent homogeneity of variance 
+
+Note that Pleil et al suggest that "techniques  based on analysis of variance (ANOVA) statistics or restricted maximum likelihood to calculate the between-sample variance (σb2) and within-sample variance (σb2) to calculate ICC" are sufficient for application of repeat analysis encountered in environmental and biological measurements research. 
+https://www.tandfonline.com/doi/full/10.1080/10937404.2018.1490128
+
+The 'ICC' package estimates the ICC and confidence intervals using the variance components from a one-way ANOVA. This method relies of restricted maximum likelihood (REML). 
+
+Packages: 
+* ICC: https://cran.r-project.org/web/packages/ICC/ICC.pdf
+* irr: https://cran.r-project.org/web/packages/irr/irr.pdf
+* psych: https://cran.r-project.org/web/packages/psych/psych.pdf
+* DescTools: https://cran.r-project.org/web/packages/DescTools/DescTools.pdf
+
+``` {r icc package testing, warning=FALSE,  message=FALSE}
+# Check power 
+iccN <- calculateIccSampleSize(p=0.3, k=3, alpha=0.5, power=0.8, by="p", step=0.1)
+
+list.edc.cre <- c("cre_log_bp3", "cre_log_bpa", "cre_log_bps", "cre_log_tcs", "cre_log_mepb", "cre_log_etpb", "cre_log_prpb", "cre_log_mbp", "cre_log_mbzp", "cre_log_mcpp", "cre_log_mecpp","cre_log_mehhp",  "cre_log_mehp", "cre_log_meohp", "cre_log_mep", "cre_log_mibp", "cre_log_dehp", "cre_log_hiphth", "cre_log_lophth",  "cre_log_phenf", "cre_log_parbf")
+
+# Spreading the data
+edclong <- reshape2::melt(dat2, id.vars=c("chear_pid", "moments"), measure.vars=list.edc.cre, variable.name="edc", value.name="concentration") 
+edcwide <- reshape2::dcast(edclong, chear_pid ~ moments + edc, value.var="concentration")
+
+# Testing different ICC packages with BPA data 
+iccbpa <- select(edcwide, c("chear_pid",ends_with("bpa")))
+rownames(iccbpa) <- iccbpa[,1]
+iccbpa[1] <- NULL
+
+icc1 <- ICC::ICCest(x=chear_pid, y=log_bpa, data=dat2, alpha=0.05, CI.type="THD")
+icc2 <- irr::icc(select(edcwide, c(ends_with("bpa"))), model=c("oneway"), type="consistency", unit = "single", conf.level=0.95)
+icc3 <- psych::ICC(iccbpa, missing=TRUE, lmer=TRUE, alpha=0.05)
+icc4 <- DescTools::ICC(iccbpa, type=c("ICC1"), conf.level=0.95, na.rm=FALSE)
+icc5 <- lme4::lmer(log_bpa~1+(1|chear_pid), data=dat2)
+
+
+view(icc2)
+# Creating table
+icc3df <- icc3$results
+icc4num <- unname(icc4)
+# Suppress below results (unhide for manual review)
+# summary(icc5)
+# sjstats::icc(icc5)
+icc5icc <- (0.03576/(0.03576+0.17078)) #Same as sjsstats
+
+method <- c("ICC", "irr", "psych", "DescTools", "lme4")
+iccvalue <- c(icc1$ICC, icc2$value, icc3df$ICC[3] ,icc4num[[1]], icc5icc )
+CIlower <- c(icc1$LowerCI, icc2$lbound, icc3df$`lower bound`[3],icc4num[[2]], "NA" )
+CIupper <- c(icc1$UpperCI, icc2$ubound, icc3df$`upper bound`[3],icc4num[[3]], "NA" )
+
+icctest <- as.data.frame(t(as.data.frame(rbind(method, iccvalue, CIlower, CIupper))))
+rownames(icctest) <- NULL
+icctest$iccvalue <- as.numeric(icctest$iccvalue)
+icctest$CIlower <- as.numeric(icctest$CIlower)
+icctest$CIupper <- as.numeric(icctest$CIupper)
+
+icctest1 <- kable(icctest,
+      col.names= c("method","ICC", "Lower 95% CI", "Upper 95%CI"), 
+      caption = "Table of BPA Results for 5 ICC Packages", digits=3)
+icctest1
+
+```
+
+
+When we calculate ICC (95%CI) for all EDCs, we see that some of the lower bounds are less than 0 (negative). DeLong and Lokhnygina state that "previous research  has  shown  that  it  is important  to allow a  negative  variance  estimate  for the variance  between  clusters.  As  a result,  the  lower  bound for  the  ICC may  be  slightly  negative. Negative estimates are common when the true ICC is close to zero." (https://dcricollab.dcri.duke.edu/sites/NIHKR/KR/Intraclass-correlation-coeffecient_V1.0.pdf)
+
+We can truncate the negative values at 0. 
+
+
+We use "ICC3" (a measure of consistency). 
+
+``` {r icc, warning=FALSE,  message=FALSE}
+# My list 
+list.edc.only <- c("bp3", "bpa", "bps", "tcs", "mepb", "etpb", "prpb", "mbp", "mbzp", "mcpp", "mecpp","mehhp",  "mehp", "meohp", "mep", "mibp", "dehp", "hiphth", "lophth", "parbf", "phenf")
+
+# Function to 1) Calculate ICC & 95% CI and 2) Output the values (Using IRR and psych packages)
+iccfun <- function(x) {
+  icc <- irr::icc(select(edcwide, c(ends_with(x))), model=c("oneway"), type="consistency",unit = "single",conf.level=0.95)
+  icc_x <- as.data.frame(t(as.data.frame(rbind(x,icc$value, icc$lbound, icc$ubound))))
+}
+
+iccfun2 <- function(x) {
+  icc<- psych::ICC(select(edcwide, c(ends_with(x))), missing=TRUE, lmer=TRUE, alpha=0.05)
+  iccdf <- icc$results
+  icc_x <- as.data.frame(t(as.data.frame(rbind(x,iccdf$ICC[3], iccdf$`lower bound`[3],iccdf$`upper bound`[3]))))
+}
+
+
+# Run functions
+iccresult <- list.edc.only %>%  
+  lapply(iccfun)
+iccdf <- bind_rows(iccresult)
+iccdf <- iccdf %>%  
+  dplyr::rename("EDC"="x", "ICC"="X", "lowerCI"="X.1", "upperCI"="X.2") %>%  
+  mutate(ICC=as.numeric(ICC), lowerCI=as.numeric(lowerCI), upperCI=as.numeric(upperCI))
+rownames(iccdf) <- NULL
+iccdf.table <- kable(iccdf,
+      col.names= c("EDC","ICC", "Lower 95% CI", "Upper 95%CI"), 
+      caption = "Table of ICC(95%CI) for EDCs [irr ICC] ", digits=3)
+iccdf.table
+
+iccresult2 <- list.edc.only %>%  
+  lapply(iccfun2)
+iccdf2 <- bind_rows(iccresult2)
+iccdf2 <- iccdf2 %>%  
+  dplyr::rename("EDC"="x", "ICC"="X", "lowerCI"="X.1", "upperCI"="X.2") %>%  
+  mutate(ICC=as.numeric(ICC), lowerCI=as.numeric(lowerCI), upperCI=as.numeric(upperCI))
+rownames(iccdf2) <- NULL
+iccdf.table2 <- kable(iccdf2,
+      col.names= c("EDC","ICC", "Lower 95% CI", "Upper 95%CI"), 
+      caption = "Table of ICC(95%CI) for EDCs [psych ICC] ", digits=3)
+iccdf.table2
+
+# Save table for later formatting 
+write.csv(iccdf, "Output/Aim1/07132021/icc_irr.csv")
+write.csv(iccdf2, "Output/Aim1/07132021/icc_psych.csv")
+```
+
+
+### Linear mixed models
+
+We used Linear Mixed Models (LMM) with random intercepts to adjust for intra-individual correlation to examine differences in EDC concentrations from B4 and 1Y compared to B1.
+
+We used the simplest random-effects term (random intercept only) in the modeling. This ignores any interaction. 
+Y ~ X1 + (1|X2)
+
+```{r edc lmm,  message=FALSE}
+
+# function for mixed models with random intercept for participant, spits out estimate & CIs
+lmmfun <- function(var) {
+  lmm <- lmer(paste0(var,"~ moments + (1|chear_pid)"), data=dat2, REML=FALSE)
+  coefs <- as.data.frame(coef(summary(lmm)))
+  coefs1 <- coefs[2:3, c(1, 2, 5)]
+  cis <- confint.merMod(lmm, level=0.95)
+  cis1 <- cis[4:5,1:2]
+  edcs <- data.frame(c(var,var))
+  lmm_var <- as.data.frame(cbind(cbind(edcs, coefs1, cis1)))
+}
+
+lmmresult <- list.edc.cre %>%  
+  lapply(lmmfun)
+lmmdf <- bind_rows(lmmresult)
+lmmdf <- rownames_to_column(lmmdf, var="moment")
+lmmdf2 <- lmmdf %>% 
+  mutate(moments= case_when(str_detect(moment,"b1") ~"B1", 
+                            str_detect(moment, "b4") ~"B4", 
+                            str_detect(moment,"pm1")~"PM1", 
+                            TRUE~moment)) %>%  
+  select(-c(moment)) %>%  
+  dplyr::rename("EDC"="c.var..var.") %>%  
+  select("moments", everything()) %>%  
+  select(EDC, everything())
+ 
+lmmdftable <- kable(lmmdf2,
+      caption = "Table of Linear Mixed Modeling Results", digits=3)
+lmmdftable
+
+
+## Save table for later formatting 
+write.csv(lmmdf2, "Output/Aim1/07132021/lmm_moments_edc.csv")
+
+```
+
+
+## Breast Density 
+### Summary stats 
+
+We evaluated summary statistics for the breast outcomes: percent FGV (pFGV), absolute FGV (aFGV), and total breast volume (tBV). 
+We used Shapiro-Wilk test and produced qq plots to evaluate normality. 
+We used log-transformed breast outcomes for the analyses.  
+```{r bd sum, message=FALSE }
+# Get unique values 
+bd <- dat2 %>%  
+  filter(!is.na(DXA_FGVabsolute)) %>%  
+  group_by(chear_pid) %>%  
+  summarise(DXA_FGVabsolute,DXA_FGVpercent,DXA_Volume, log_pFGV, log_aFGV, log_tBV) %>%  
+  distinct()
+
+# Get summary stats 
+attach(bd)
+bdvars <- cbind(DXA_FGVabsolute,DXA_FGVpercent,DXA_Volume)
+bdsumtable <- psych::describe(bdvars) %>% 
+  as.data.frame() %>% 
+  select(n,mean,sd,median,min,max,range,skew)
+kable(bdsumtable, digits=2)
+
+
+``` 
+
+### Boxplots
+
+```{r bd box plot, warning=FALSE,  message=FALSE}
+# Lists of breast outcomes
+list.bd <- c("DXA_FGVpercent", "DXA_FGVabsolute", "DXA_Volume")
+list.bd.log <- c("log_pFGV", "log_aFGV", "log_tBV")
+
+# Transforming to long data 
+bdlong <- reshape2::melt(dat2, id.vars=c("chear_pid"), measure.vars=list.bd) 
+bdlong <- bdlong %>% distinct()
+bdloglong <- reshape2::melt(dat2, id.vars=c("chear_pid"), measure.vars=list.bd.log)
+bdloglong <- bdloglong %>% distinct()
+
+# Box plots 
+box.bd.pfgv <- ggplot(dat2, aes(y=DXA_FGVpercent)) + 
+  geom_boxplot() + 
+  theme_bw()+
+  scale_x_discrete()+
+  ylab("%") + 
+  ggtitle("% FGV")
+
+box.bd.afgv <- ggplot(dat2, aes(y=DXA_FGVabsolute)) + 
+  geom_boxplot() + 
+  theme_bw()+
+  scale_x_discrete()+
+  ylab("cm3") + 
+  ggtitle("absolute FGV")
+
+box.bd.tbv <- ggplot(dat2, aes(y=DXA_Volume)) + 
+  geom_boxplot() + 
+  theme_bw()+
+  scale_x_discrete()+
+  ylab("cm3") + 
+  ggtitle("total Volume")
+
+box.bd.pfgv.log <- ggplot(dat2, aes(y=log_pFGV)) + 
+  geom_boxplot() + 
+  theme_bw()+
+  scale_x_discrete()+
+  ylab("log(%)") + 
+  ggtitle("log % FGV")
+
+box.bd.afgv.log <- ggplot(dat2, aes(y=log_aFGV)) + 
+  geom_boxplot() + 
+  theme_bw()+
+  scale_x_discrete()+
+  ylab("log(cm3)") + 
+  ggtitle("log absolute FGV")
+
+box.bd.tbv.log <- ggplot(dat2, aes(y=log_tBV)) + 
+  geom_boxplot() + 
+  theme_bw()+
+  scale_x_discrete()+
+  ylab("log(cm3)") + 
+  ggtitle("log total Volume")
+
+ggarrange(box.bd.pfgv, box.bd.afgv, box.bd.tbv, 
+          box.bd.pfgv.log, box.bd.afgv.log, box.bd.tbv.log,
+          ncol=3, nrow=2)
+
+```
+
+
+### Checking distribution
+
+```{r normal, message=FALSE}
+#shapiro test for normality 
+n1 <- shapiro.test(bd$DXA_FGVabsolute)
+n1.w <- signif(n1$statistic, digits = 2)
+n1.p <- signif(n1$p.value,digits=2)
+n1.m <- n1$method
+
+n2 <- shapiro.test(bd$DXA_FGVpercent)
+n2.w <- signif(n2$statistic,digits=2)
+n2.p <- signif(n2$p.value,digits=2)
+n2.m <- n2$method
+
+n3 <- shapiro.test(bd$DXA_Volume)
+n3.w <- signif(n3$statistic,digits=2)
+n3.p <- signif(n3$p.value, digits=2)
+n3.m <- n3$method
+
+
+# qq plots 
+q1 <- ggplot(bd)+
+  aes(sample=DXA_FGVabsolute)+
+  stat_qq()+ stat_qq_line(color="deepskyblue")+
+  labs(title="absolute FGV")+
+  geom_label(x=0,y=500,label=paste("W=",n1.w," (p=",n1.p,")"))
+
+q2 <- ggplot(bd)+
+  aes(sample=DXA_FGVpercent)+
+  stat_qq()+ stat_qq_line(color="firebrick2")+
+  labs(title="percent FGV")+
+  geom_label(x=0,y=100,label=paste("W=",n2.w," (p=",n2.p,")"))
+
+q3 <- ggplot(bd)+
+  aes(sample=DXA_Volume)+
+  stat_qq()+ stat_qq_line(color="chartreuse3")+
+  labs(title="Total volume")+
+  geom_label(x=0,y=2400,label=paste("W=",n3.w," (p=",n3.p,")"))
+
+ggarrange(q2, q1, q3, 
+          ncol=3, nrow=1)
+```
+
+
+## Covariates 
+
+We identified potential confounders a priori and potential effect measure modifiers. 
+Here, we look at the distribution of the covariates. 
+
+``` {r cov}
+
+# Setting up data 
+fixedv <- dat2 %>%  
+  select(c("chear_pid", "age_men", "medu", "bfeedcat", "birth_mode")) %>%  
+  distinct()
+timev <- c("age", "fatp","fatcat", "avgcal", "avgfru", "avgveg", "avgyog", "avgmeat")
+
+allvars <- c("chear_pid", "moments","age", "age_men", "medu", "bfeedcat", "birth_mode",  "fatp","fatcat", "avgcal", "avgfru", "avgveg", "avgyog", "avgmeat")
+
+covar <- reshape2::melt(dat2, id.vars =c("chear_pid", "moments"), measure.vars=timev)
+covarwide <- reshape2::dcast(covar, chear_pid ~ moments + variable, value.var="value")
+covarwideall <- left_join(fixedv, covarwide, by="chear_pid")
+
+b1vars <- c("medu", "bfeedcat", "birth_mode", "age_men", "b1_age", "b1_fatcat","b1_fatp",
+            "b1_avgcal" )
+b4vars <- c("medu", "bfeedcat", "birth_mode", "age_men", "b4_age", "b4_fatcat","b4_fatp", 
+            "b4_avgcal")
+pm1vars <- c("medu", "bfeedcat", "birth_mode", "age_men", "pm1_age", "pm1_fatcat", "pm1_fatp",
+             "pm1_avgcal")
+
+b1covdf <- select(covarwideall, all_of(b1vars))
+b4covdf <- select(covarwideall, all_of(b4vars))
+pm1covdf <- select(covarwideall, all_of(pm1vars))
+
+# Plotting 
+pairs.panels(b1covdf, method="pearson", main = "Covariate correlations (B1)", panel = panel.smooth, cex.labels=1)
+pairs.panels(b4covdf, method="pearson", main = "Covariate correlations (B4)", panel = panel.smooth, cex.labels=1)
+pairs.panels(pm1covdf, method="pearson", main = "Covariate correlations (1PM)", panel = panel.smooth, cex.labels=1)
+
+# Distributions 
+## See covariate setup file for more details here
+
+# Examining diet data :: In GEE models, Getting error when adding avgcal to the model: Error in geese.fit(xx, yy, id, offset, soffset, w, waves = waves, zsca, : nrow(zsca) and length(y) not match 
+# Checking NAs for variables; might be due to increase in # of missing diet at B1 
+# To fix, subset girls at B1 & impute mean diet (~50 extra missing at B1)
+dat2 <- dat2 %>%
+   group_by(moments) %>%
+   mutate(avgcal = replace(avgcal, 
+            is.na(avgcal), mean(avgcal, na.rm = TRUE)))
+
+
+```
+
+
+## Table 1 
+
+Characteristics of GOCS girls in the EDC-breast density analysis. Note the number of available urine samples for each timepoint (moment). Note that we don't see too many differences across the time points- though girls have higher fat percentages at 1YPm compared to B1 and B4. 
+
+We can look at strata-specific table 1s to examine differences in fixed covariates for those included in each tanner stage urine sample. 
+```{r tab1}
+
+# Selecting variables for use in table 1
+facts <- c("urine_b1", "urine_b4", "urine_1pm", "medu",  "bfeedcat", "birth_mode")
+conts <- c("age", "age_men", "bmiz", "fatp", "ave_cal")
+myvars <- c("moments", "urine_b1", "urine_b4", "urine_1pm", "age", "age_men", "fatp", "fatcat", "bmiz", "medu", "bfeedcat", "birth_mode", "avgcal")
+
+# Table one 
+tab1all <- CreateTableOne(vars=myvars, strata="moments", data=dat2, test=FALSE)
+tab1allpr <- print(tab1all, showAllLevels = TRUE,  noSpaces = TRUE)
+
+
+# Table 1- additional strata
+aim1b1 <- filter(dat2, moments=='b1' & urine_b1 == 1)
+aim1b4 <- filter(dat2, moments=='b4' & urine_b4 == 1)
+aim11pm <- filter(dat2, moments=='pm1' & urine_1pm == 1)
+
+tab1b1 <- CreateTableOne(vars=myvars, data=aim1b1)
+tab1b1pr <- print(tab1b1, showAllLevels = TRUE,  noSpaces = TRUE)
+tab1b4 <- CreateTableOne(vars=myvars, data=aim1b4)
+tab1b4pr <- print(tab1b4, showAllLevels = TRUE,  noSpaces = TRUE)
+tab11pm <- CreateTableOne(vars=myvars, data=aim11pm)
+tab11pmpr <- print(tab11pm, showAllLevels = TRUE,  noSpaces = TRUE)
+
+
+# Saving
+write.csv(tab1allpr, file = "Output/Aim1/07132021/table1all.csv")
+write.csv(tab1b1pr, file = "Output/Aim1/07132021/table1b1.csv")
+write.csv(tab1b4pr, file = "Output/Aim1/07132021/table1b4.csv")
+write.csv(tab11pmpr, file = "Output/Aim1/07132021/table1pm1.csv")
+```
+
+
+``` {r save}
+save(dat2, file = "Data/FinalData/dat2.Rdata")
+
+```

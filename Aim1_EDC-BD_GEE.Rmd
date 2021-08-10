@@ -1,0 +1,732 @@
+---
+title: "[Aim 1] Evaluating the impact of endocrine-disrupting chemicals on breast density- An update: GEE Models "
+author: "Lara Yoon"
+date: "7/13/2021"
+output: 
+  html_document: 
+    toc: true
+    toc_float: true 
+---
+
+R markdown file for EDC-BD GEE modeling. 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/laray/Box/Projects/2020-Dissertation/Analysis')
+
+#In your code chunk, use echo=TRUE to display the code, message=FALSE to suppress messages, warning=FALSE to suppress warning, and include = FALSE to prevent code and results from appearing in the finished file.
+```
+
+## Setup 
+
+```{r packages, include = FALSE}
+pacman::p_load(devtools,here,BiocManager, dagitty,
+               tidyverse, reshape2, janitor, knitr, kableExtra,
+               tableone, readxl, corrplot, writexl,
+               rmcorr, geepack, ggplot2, sjstats, psych, 
+               ggpubr, ggsci, lme4, corrr, irr, ICC.Sample.Size, ICC,
+               Hmisc, mice, psych, DescTools, RColorBrewer, 
+               sjPlot, sjmisc, psycho, lsmeans, lmerTest, 
+               emmeans, jtools, Publish)
+pacman::p_loaded()
+
+
+```
+
+```{r data, message=FALSE, results = FALSE, warning=FALSE}
+# Import data from file "Aim1_EDC-BD_Setup.RMD" 
+
+load(file = "Data/FinalData/dat2.Rdata")
+
+```
+
+```{r dag}
+
+# Testable implications 
+testImplications <- function( covariance.matrix, sample.size ){
+	library(ggm)
+	tst <- function(i){ pcor.test( pcor(i,covariance.matrix), length(i)-2, sample.size )$pvalue }
+tos <- function(i){ paste(i,collapse=" ") }
+implications <- list(c("BD","Breast feeding","Diet","Fat%","Age","EDC","M_Edu"),
+		c("BD","Birth mode","Diet","Fat%","Age","EDC","M_Edu"),
+		c("M_Edu","Fat%","Breast feeding","Birth mode"),
+		c("M_Edu","Diet"),
+		c("M_Edu","Age"),
+		c("M_Edu","Age at menarche","EDC"),
+		c("Breast feeding","Birth mode","M_Edu"),
+		c("Breast feeding","Diet"),
+		c("Breast feeding","Age"),
+		c("Breast feeding","Age at menarche","EDC"),
+		c("Fat%","Age","Diet"),
+		c("Fat%","Age at menarche","EDC"),
+		c("Birth mode","Diet"),
+		c("Birth mode","Age"),
+		c("Birth mode","Age at menarche","EDC"),
+		c("Diet","Age at menarche","EDC"),
+		c("Age","Age at menarche","EDC"))
+	data.frame( implication=unlist(lapply(implications,tos)),
+		pvalue=unlist( lapply( implications, tst ) ) )
+
+}
+
+
+# Model code
+g <- dagitty('dag {
+bb="0,0,1,1"
+"Age at menarche" [pos="0.456,0.657"]
+"Birth mode" [pos="0.128,0.497"]
+"Breast feeding" [pos="0.208,0.416"]
+"Fat%" [adjusted,pos="0.424,0.476"]
+Age [adjusted,pos="0.401,0.289"]
+BD [outcome,pos="0.700,0.593"]
+Diet [adjusted,pos="0.299,0.367"]
+EDC [exposure,pos="0.279,0.594"]
+M_Edu [adjusted,pos="0.220,0.233"]
+"Age at menarche" -> BD
+"Birth mode" -> "Fat%"
+"Birth mode" -> EDC
+"Breast feeding" -> "Fat%"
+"Breast feeding" -> EDC
+"Fat%" -> BD
+"Fat%" -> EDC
+Age -> BD
+Age -> Diet
+Age -> EDC
+Diet -> "Fat%"
+Diet -> BD
+Diet -> EDC
+EDC -> "Age at menarche"
+EDC -> BD
+M_Edu -> "Birth mode"
+M_Edu -> "Breast feeding"
+M_Edu -> BD
+M_Edu -> EDC
+}')
+plot(g)
+
+```
+
+## GEE modeling 
+
+The primary issue for examining exposure data with this time-varying structure is how to account for the longitudinal features of the exposure trajectory in a final disease risk model with the outcome, conditional on the complete set of exposure measures. 
+This type of problem is somewhat unique, as in most regression settings the independent variable and the dependent variable are either both cross-sectional, both longitudinal, or the outcome is longitudinal with a single baseline measure of exposure.
+Commonly used approaches such as multiple cross-sectional models or simultaneous multivariate logistic regression modeling suffer from problems of multiple testing or collinearity. 
+Several statistical approaches exist to help identify windows of vulnerability with repeated exposure measurements (Chen et al. 2015; Sánchez et al. 2011). Sanchez et al. and Chen et al. have examined the use of GEE methods to model repeated measures of exposure with a single outcome. 
+
+We elected to use the "Multiple Informants" approached described by Sanchez, which has the following characteristics: 
+
+- Can test difference of estimated exposure effects across time
+
+- At least one sample per participant (does not require one per window)
+
+- Assumes homogeneous exposure effect within window
+
+- Missing data assumption: MCAR 
+
+- No restrictions on assumed time spacing between one window and another
+
+- Not subject to collinearity problems
+
+
+My code is based on SAS code adapted from Sanchez et al and was replicated in R.  Link: https://ehp.niehs.nih.gov/action/downloadSupplement?doi=10.1289%2Fehp.1002453&file=ehp.1002453.s001.acco.pdf
+
+Other resources include Chen et al. (Statistical methods for modeling repeated measures of maternal environmental exposure biomarkers during pregnancy in association with preterm birth).
+Link: https://ehjournal.biomedcentral.com/articles/10.1186/1476-069X-14-9#Sec2
+
+
+### Testing code  
+
+This section uses BP3 to test the various GEE models. We have a crude model with just interaction with Tanner stage (moments) and a full model that is adjusted for potential confounders. 
+
+
+We are considering the following basic model, where: 
+
+- Y: Breast outcome (%FGV), log-transformed, continuous
+
+- X: EDC exposure (BP3), log-transformed, continuous
+
+- M: Moments (B1, B4, 1YPM), categorical 3-level variable 
+
+$$\hat{Y} = \hat{\beta}_0 + \hat{\beta}_x X +  \hat{\beta}_{m1}(M=B4) + \hat{\beta}_{m2}(M=1YPM) + \hat{\beta}_{xm1}X(M=B4) + \hat{\beta}_{xm2}X(M=1YPM) $$
+We can get the slopes for each category with: 
+
+$$ slope_{X|M=2}=\beta_x+ \beta_{xm2} $$
+$$ slope_{X|M=3}=\beta_x+ \beta_{xm3} $$
+$$ slope_{X|M=1}=\beta_x $$
+
+The confidence intervals for the new slopes (those that were added) are: 
+
+$$ \sqrt{SE_{1}^2 + SE_{2}^2 +2Cov(b1,b2)}$$
+
+
+Other resources: 
+
+- ME3
+
+- https://stats.idre.ucla.edu/r/seminars/interactions-r/#s4
+
+
+
+```{r gee coef model 1}
+
+set.seed(801)
+
+## Testing model output for BP3 
+
+# MODEL 1: Interaction model with main effects, no confounder adjustment
+testfit1 <- geeglm(formula=log_pFGV ~ moments + log_bp3 + log_bp3*moments,
+               id=chear_pid, 
+               data=dat2, 
+               family=gaussian(link = "identity"), 
+               corstr="independence", 
+               waves=moments)
+
+# Get beta coefficient & standard error output
+coefs <- coef(summary(testfit1))
+
+# Get var-covar matrix
+covs <- as.data.frame(vcov(testfit1))
+
+# Calculate new coefficients and standard errors accounting for interaction terms by hand
+betaB1 <- coefs[4,1]
+seB1 <- coefs[4,2]
+betaB4 <- coefs[4,1] + coefs[5,1]
+seB4 <- sqrt(coefs[4,2]^2 + coefs[5,2]^2 + 2*(covs[5,4]))
+betaPM1 <- coefs[4,1] + coefs[6,1]
+sePM1 <- sqrt(coefs[4,2]^2 + coefs[6,2]^2 + 2*(covs[6,4]))
+
+# Calculate 95% confidence intervals 
+cilowerB1 <- betaB1 - (qnorm(0.975)*seB1)
+ciupperB1 <- betaB1 + (qnorm(0.975)*seB1)
+cilowerB4 <- betaB4 - (qnorm(0.975)*seB4)
+ciupperB4 <- betaB4 + (qnorm(0.975)*seB4)
+cilowerPM1 <- betaPM1 - (qnorm(0.975)*sePM1)
+ciupperPM1 <- betaPM1 + (qnorm(0.975)*sePM1)
+
+# Creating a data frame 
+bp3df_model1 <- data.frame(EDC = character(), betaB1 = numeric(), cilowerB1 = numeric(), ciupperB1 = numeric(),
+                    betaB4 = numeric(), cilowerB4 = numeric(), ciupperB4 = numeric(),
+                    betaPM1 = numeric(), cilowerPM1 = numeric(), ciupperPM1 = numeric(),
+                    stringsAsFactors = FALSE)
+edc <- "bp3"
+bp3df_model1[1, ] <- list(edc, betaB1, cilowerB1, ciupperB1, betaB4, cilowerB4, ciupperB4, betaPM1, cilowerPM1, ciupperPM1)  
+bp3df_model1kab <- kable(bp3df_model1, 
+                   caption="Effect of EDC on %FGV by Moment (Model 1)- hand calculated ", 
+                   digits=4)
+bp3df_model1kab
+
+
+# Testing hand-calculated SE & CI with emtrends
+bp3_model1EM <- emtrends(testfit1, ~ moments, var="log_bp3")
+bp3_model1EMkab <- kable(bp3_model1EM, 
+                   caption="Effect of EDC on %FGV by Moment (Model 1)- function emtrends ", 
+                   digits=4)
+bp3_model1EMkab
+```
+
+#### Interpretation (model 1)
+The beta coefficients and standard errors from Model 1 (crude model) are: 
+
+|Parameter          | Estimate | Std.err | 
+|------------------:|:--------:|:--------|
+|intercept          |  1.7051  | 0.0219  |   
+|momentsb4          | -0.0414  |0.0219   |
+|momentspm1         | -0.0401  |0.0179   |
+|log_bp3            | -0.0207  |0.0166   |
+|momentsb4:log_bp3  |  0.0371  |0.0188   |  
+|momentspm1:log_bp3 |  0.0304  |0.0204   |
+
+
+Model: log_FGV = b0 + b1(momentsb4) + b2(momentspm1) + b3(log_bp3) + b4(momentsb4:log_bp3) + b5(momentspm1:log_bp3)
+
+To interpret these values:
+
+- The change in %FGV associated with a 1-unit increase in BP3 at Tanner B1: b4  =  -0.021 
+
+- The change in %FGV associated with a 1-unit increase in BP3 at Tanner B4: b3 + b4  = 0.016
+
+- The change in %FGV associated with a 1-unit increase in BP3 at Tanner PM1: b3 + b5 = 0.010
+
+
+
+- b3 : At timepoint B1, a one log increase in EDC is associated with a decrease of -0.0207 log %FGV
+
+- b4 + b5 :  The difference in log %FGV for a one log increase in EDC at timepoint B4 
+
+- b5 + b6 : The difference in log %FGV for a one log increase in EDC at timepoint pm1
+
+
+- In practical terms, for a 1 unit change in the predictor the difference in the log of Y (the outcome) is -0.02. Recalling our rules of logs (in this case we are using log 10), we can do 10^(-0.02)=0.955. Therefore, for a 1 unit increase in log bp3 (which is a 10-fold increase in bp3), we see a (1-0.955)%=.045 x100 = 4.5% decrease in percent breast density. 
+
+
+#### Re-run, using model 2 (confounder adjusted)
+
+```{r gee coef model 2}
+
+set.seed(801)
+
+# MODEL 2: Interaction model with main effects & adjusting for age, fat, medu, diet
+testfit2 <- geeglm(formula=log_pFGV ~ moments + log_bp3 + log_bp3*moments +  medu + age*moments + fatp*moments + avgcal*moments + log_cre*moments,
+               id=chear_pid, 
+               data=dat2, 
+               family=gaussian(link = "identity"), 
+               corstr="independence", 
+               waves=moments)
+
+# Get beta coefficient & standard error output
+coefs <- coef(summary(testfit2))
+
+# Get var-covar matrix
+covs <- vcov(testfit2)
+
+# Calculate new coefficients and standard errors accounting for interaction 
+betaB1 <- coefs[4,1]
+seB1 <- coefs[4,2]
+betaB4 <- coefs[4,1] + coefs[10,1]
+seB4 <- sqrt(coefs[4,2]^2 + coefs[10,2]^2 + 2*(covs[4,10]))
+betaPM1 <- coefs[4,1] + coefs[11,1]
+sePM1 <- sqrt(coefs[4,2]^2 + coefs[11,2]^2 + 2*(covs[4,11]))
+
+# Calculate 95% confidence intervals
+cilowerB1 <- betaB1 - (qnorm(0.975)*seB1)
+ciupperB1 <- betaB1 + (qnorm(0.975)*seB1)
+cilowerB4 <- betaB4 - (qnorm(0.975)*seB4)
+ciupperB4 <- betaB4 + (qnorm(0.975)*seB4)
+cilowerPM1 <- betaPM1 - (qnorm(0.975)*sePM1)
+ciupperPM1 <- betaPM1 + (qnorm(0.975)*sePM1)
+
+# Creating a data frame 
+bp3df <- data.frame(EDC = character(), betaB1 = numeric(), cilowerB1 = numeric(), ciupperB1 = numeric(),
+                    betaB4 = numeric(), cilowerB4 = numeric(), ciupperB4 = numeric(),
+                    betaPM1 = numeric(), cilowerPM1 = numeric(), ciupperPM1 = numeric(),
+                    stringsAsFactors = FALSE)
+edc <- "bp3"
+bp3df[1, ] <- list(edc, betaB1, cilowerB1, ciupperB1, betaB4, cilowerB4, ciupperB4, betaPM1, cilowerPM1, ciupperPM1)  
+bp3df_model2kab <- kable(bp3df, 
+                   caption="Effect of EDC on %FGV by Moment (Model 2)- hand calculated ", 
+                   digits=4)
+bp3df_model2kab
+
+
+
+# Testing hand-calculated SE & CI with emtrends
+bp3_model2EM <- emtrends(testfit2, ~ moments, var="log_bp3")
+bp3_model2EMkab <- kable(bp3_model2EM, 
+                   caption="Effect of EDC on %FGV by Moment (Model 2)- function emtrends ", 
+                   digits=4)
+bp3_model2EMkab
+
+```
+
+### GEE Models: %FGV
+For all models we are using a log-transformed EDC value and a log-transformed breast outcome. 
+
+```{r gee pFGV}
+set.seed(801)
+
+# List of EDCs (one model per EDC)
+list.edcs <- c("log_bp3", "log_bpa", "log_bps", "log_tcs", "log_mepb", "log_etpb", "log_prpb", "log_mbp", "log_mbzp", "log_mcpp", "log_mecpp","log_mehhp",  "log_mehp", "log_meohp", "log_mep", "log_mibp", "log_dehp", "log_hiphth", "log_lophth", "log_parbf", "log_phenf")
+
+
+# Function for model1 : basic model with interaction 
+geefun <- function(var) {
+  form <- as.formula(paste0("log_pFGV ~ 0 + moments + ",var," + moments*",var))
+  fit_var <- geeglm(formula=form,
+               id=chear_pid, 
+               data=dat2, 
+               family=gaussian(link = "identity"), 
+               corstr="independence", 
+               waves=moments)
+   coefs <- coef(summary(fit_var)) 
+  covs <- vcov(fit_var)
+  betaB1 <- coefs[4,1]
+  seB1 <- coefs[4,2]
+  betaB4 <- coefs[4,1] + coefs[5,1]
+  seB4 <- sqrt(coefs[4,2]^2 + coefs[5,2]^2 + 2*(covs[5,4]))
+  betaPM1 <- coefs[4,1] + coefs[6,1]
+  sePM1 <- sqrt(coefs[4,2]^2 + coefs[6,2]^2 + 2*(covs[6,4]))
+  cilowerB1 <- betaB1 - (qnorm(0.975)*seB1)
+  ciupperB1 <- betaB1 + (qnorm(0.975)*seB1)
+  cilowerB4 <- betaB4 - (qnorm(0.975)*seB4)
+  ciupperB4 <- betaB4 + (qnorm(0.975)*seB4)
+  cilowerPM1 <- betaPM1 - (qnorm(0.975)*sePM1)
+  ciupperPM1 <- betaPM1 + (qnorm(0.975)*sePM1)
+  vardf <- data.frame(EDC = character(), betaB1 = numeric(), cilowerB1 = numeric(), ciupperB1 = numeric(),
+                    betaB4 = numeric(), cilowerB4 = numeric(), ciupperB4 = numeric(),
+                    betaPM1 = numeric(), cilowerPM1 = numeric(), ciupperPM1 = numeric(),
+                    stringsAsFactors = FALSE)
+  edc <- as.character(var)
+  vardf[1, ] <- list(edc, betaB1, cilowerB1, ciupperB1, betaB4, cilowerB4, ciupperB4, betaPM1, cilowerPM1, ciupperPM1)
+}
+
+
+# Output for model1: basic model with interaction
+geeres <- list.edcs %>%  
+  lapply(geefun)
+geeresdf <- as.data.frame(do.call(rbind, geeres))
+names(geeresdf) <- c("edc", "betaB1", "cilowerB1", "ciupperB1", "betaB4", "cilowerB4", "ciupperB4", "betaPM1", "cilowerPM1", "ciupperPM1")
+
+geeresdf1kab <- kable(geeresdf, 
+                   caption="Effect of EDC on %FGV by Moment", 
+                   digits=3)
+geeresdf1kab
+
+
+# Function for model2 :  model with interaction & potential confounders
+geefun2 <- function(var) {
+  form2 <- as.formula(paste0("log_pFGV ~ 0 + moments + ",var," + moments*",var,"+ medu + age*moments + fatp*moments + avgcal*moments + log_cre*moments"))
+  fit_var2 <- geeglm(formula=form2,
+               id=chear_pid, 
+               data=dat2, 
+               family=gaussian(link = "identity"), 
+               corstr="independence", 
+               waves=moments)
+  coefs <- coef(summary(fit_var2)) 
+  covs <- vcov(fit_var2)
+  betaB1 <- coefs[4,1]
+  seB1 <- coefs[4,2]
+  betaB4 <- coefs[4,1] + coefs[10,1]
+  seB4 <- sqrt(coefs[4,2]^2 + coefs[10,2]^2 + 2*(covs[4,10]))
+  betaPM1 <- coefs[4,1] + coefs[11,1]
+  sePM1 <- sqrt(coefs[4,2]^2 + coefs[11,2]^2 + 2*(covs[4,11]))
+  cilowerB1 <- betaB1 - (qnorm(0.975)*seB1)
+  ciupperB1 <- betaB1 + (qnorm(0.975)*seB1)
+  cilowerB4 <- betaB4 - (qnorm(0.975)*seB4)
+  ciupperB4 <- betaB4 + (qnorm(0.975)*seB4)
+  cilowerPM1 <- betaPM1 - (qnorm(0.975)*sePM1)
+  ciupperPM1 <- betaPM1 + (qnorm(0.975)*sePM1)
+  vardf <- data.frame(EDC = character(), betaB1 = numeric(), cilowerB1 = numeric(), ciupperB1 = numeric(),
+                    betaB4 = numeric(), cilowerB4 = numeric(), ciupperB4 = numeric(),
+                    betaPM1 = numeric(), cilowerPM1 = numeric(), ciupperPM1 = numeric(),
+                    stringsAsFactors = FALSE)
+  edc <- as.character(var)
+  vardf[1, ] <- list(edc, betaB1, cilowerB1, ciupperB1, betaB4, cilowerB4, ciupperB4, betaPM1, cilowerPM1, ciupperPM1)
+}
+
+
+# Output for model2:  model with interaction & potential confounders
+geeres2 <- list.edcs %>%  
+  lapply(geefun2)
+geeresdf2 <- as.data.frame(do.call(rbind, geeres2))
+names(geeresdf2) <- c("edc", "betaB1", "cilowerB1", "ciupperB1", "betaB4", "cilowerB4", "ciupperB4", "betaPM1", "cilowerPM1", "ciupperPM1")
+
+geeresdf2kab <- kable(geeresdf2, 
+                   caption="Effect of EDC on %FGV by Moment (adjusted for age, fat%, medu, avgcal)", 
+                   digits=3)
+geeresdf2kab
+
+
+# Save table for later formatting 
+geeresdf <- apply(geeresdf,2,as.character)
+geeresdf2 <- apply(geeresdf2,2,as.character)
+write.csv(geeresdf, "Output/Aim1/07132021/gee_pfgv_basic.csv")
+write.csv(geeresdf2, "Output/Aim1/07132021/gee_pfgv_adj.csv")
+
+```
+
+### GEE Models: absolute FGV
+For all models we are using a log-transformed EDC value and a log-transformed breast outcome. 
+
+```{r gee aFGV}
+set.seed(801)
+
+# List of EDCs (one model per EDC)
+list.edcs <- c("log_bp3", "log_bpa", "log_bps", "log_tcs", "log_mepb", "log_etpb", "log_prpb", "log_mbp", "log_mbzp", "log_mcpp", "log_mecpp","log_mehhp",  "log_mehp", "log_meohp", "log_mep", "log_mibp", "log_dehp", "log_hiphth", "log_lophth", "log_parbf", "log_phenf")
+
+
+# Function for model1 : basic model with interaction 
+geefun <- function(var) {
+  form <- as.formula(paste0("log_aFGV ~ 0 + moments + ",var," + moments*",var))
+  fit_var <- geeglm(formula=form,
+               id=chear_pid, 
+               data=dat2, 
+               family=gaussian(link = "identity"), 
+               corstr="independence", 
+               waves=moments)
+   coefs <- coef(summary(fit_var)) 
+  covs <- vcov(fit_var)
+  betaB1 <- coefs[4,1]
+  seB1 <- coefs[4,2]
+  betaB4 <- coefs[4,1] + coefs[5,1]
+  seB4 <- sqrt(coefs[4,2]^2 + coefs[5,2]^2 + 2*(covs[5,4]))
+  betaPM1 <- coefs[4,1] + coefs[6,1]
+  sePM1 <- sqrt(coefs[4,2]^2 + coefs[6,2]^2 + 2*(covs[6,4]))
+  cilowerB1 <- betaB1 - (qnorm(0.975)*seB1)
+  ciupperB1 <- betaB1 + (qnorm(0.975)*seB1)
+  cilowerB4 <- betaB4 - (qnorm(0.975)*seB4)
+  ciupperB4 <- betaB4 + (qnorm(0.975)*seB4)
+  cilowerPM1 <- betaPM1 - (qnorm(0.975)*sePM1)
+  ciupperPM1 <- betaPM1 + (qnorm(0.975)*sePM1)
+  vardf <- data.frame(EDC = character(), betaB1 = numeric(), cilowerB1 = numeric(), ciupperB1 = numeric(),
+                    betaB4 = numeric(), cilowerB4 = numeric(), ciupperB4 = numeric(),
+                    betaPM1 = numeric(), cilowerPM1 = numeric(), ciupperPM1 = numeric(),
+                    stringsAsFactors = FALSE)
+  edc <- as.character(var)
+  vardf[1, ] <- list(edc, betaB1, cilowerB1, ciupperB1, betaB4, cilowerB4, ciupperB4, betaPM1, cilowerPM1, ciupperPM1)
+}
+
+# Output for model1: basic model with interaction
+geeres <- list.edcs %>%  
+  lapply(geefun)
+geeresdf <- as.data.frame(do.call(rbind, geeres))
+names(geeresdf) <- c("edc", "betaB1", "cilowerB1", "ciupperB1", "betaB4", "cilowerB4", "ciupperB4", "betaPM1", "cilowerPM1", "ciupperPM1")
+
+geeresdf1kab <- kable(geeresdf, 
+                   caption="Effect of EDC on aFGV by Moment", 
+                   digits=3)
+geeresdf1kab
+
+
+# Function for model2 :  model with interaction & potential confounders
+geefun2 <- function(var) {
+  form2 <- as.formula(paste0("log_aFGV ~ 0 + moments + ",var," + moments*",var,"+ medu + age*moments + fatp*moments + avgcal*moments + log_cre*moments"))
+  fit_var2 <- geeglm(formula=form2,
+               id=chear_pid, 
+               data=dat2, 
+               family=gaussian(link = "identity"), 
+               corstr="independence", 
+               waves=moments)
+  coefs <- coef(summary(fit_var2)) 
+  covs <- vcov(fit_var2)
+  betaB1 <- coefs[4,1]
+  seB1 <- coefs[4,2]
+  betaB4 <- coefs[4,1] + coefs[10,1]
+  seB4 <- sqrt(coefs[4,2]^2 + coefs[10,2]^2 + 2*(covs[4,10]))
+  betaPM1 <- coefs[4,1] + coefs[11,1]
+  sePM1 <- sqrt(coefs[4,2]^2 + coefs[11,2]^2 + 2*(covs[4,11]))
+  cilowerB1 <- betaB1 - (qnorm(0.975)*seB1)
+  ciupperB1 <- betaB1 + (qnorm(0.975)*seB1)
+  cilowerB4 <- betaB4 - (qnorm(0.975)*seB4)
+  ciupperB4 <- betaB4 + (qnorm(0.975)*seB4)
+  cilowerPM1 <- betaPM1 - (qnorm(0.975)*sePM1)
+  ciupperPM1 <- betaPM1 + (qnorm(0.975)*sePM1)
+  vardf <- data.frame(EDC = character(), betaB1 = numeric(), cilowerB1 = numeric(), ciupperB1 = numeric(),
+                    betaB4 = numeric(), cilowerB4 = numeric(), ciupperB4 = numeric(),
+                    betaPM1 = numeric(), cilowerPM1 = numeric(), ciupperPM1 = numeric(),
+                    stringsAsFactors = FALSE)
+  edc <- as.character(var)
+  vardf[1, ] <- list(edc, betaB1, cilowerB1, ciupperB1, betaB4, cilowerB4, ciupperB4, betaPM1, cilowerPM1, ciupperPM1)
+}
+
+
+# Output for model2:  model with interaction & potential confounders
+geeres2 <- list.edcs %>%  
+  lapply(geefun2)
+geeresdf2 <- as.data.frame(do.call(rbind, geeres2))
+names(geeresdf2) <- c("edc", "betaB1", "cilowerB1", "ciupperB1", "betaB4", "cilowerB4", "ciupperB4", "betaPM1", "cilowerPM1", "ciupperPM1")
+
+geeresdf2kab <- kable(geeresdf2, 
+                   caption="Effect of EDC on aFGV by Moment (adjusted for age, fat%, medu, avgcal)", 
+                   digits=3)
+geeresdf2kab
+
+
+# Save table for later formatting 
+geeresdf <- apply(geeresdf,2,as.character)
+geeresdf2 <- apply(geeresdf2,2,as.character)
+write.csv(geeresdf, "Output/Aim1/07132021/gee_aFGV_basic.csv")
+write.csv(geeresdf2, "Output/Aim1/07132021/gee_aFGV_adj.csv")
+```
+
+### GEE Models: Total Breast Volume
+For all models we are using a log-transformed EDC value and a log-transformed breast outcome. 
+
+```{r gee tBV}
+set.seed(801)
+
+# List of EDCs (one model per EDC)
+list.edcs <- c("log_bp3", "log_bpa", "log_bps", "log_tcs", "log_mepb", "log_etpb", "log_prpb", "log_mbp", "log_mbzp", "log_mcpp", "log_mecpp","log_mehhp",  "log_mehp", "log_meohp", "log_mep", "log_mibp", "log_dehp", "log_hiphth", "log_lophth", "log_parbf", "log_phenf")
+
+
+# Function for model1 : basic model with interaction 
+geefun <- function(var) {
+  form <- as.formula(paste0("log_tBV ~ 0 + moments + ",var," + moments*",var))
+  fit_var <- geeglm(formula=form,
+               id=chear_pid, 
+               data=dat2, 
+               family=gaussian(link = "identity"), 
+               corstr="independence", 
+               waves=moments)
+   coefs <- coef(summary(fit_var)) 
+  covs <- vcov(fit_var)
+  betaB1 <- coefs[4,1]
+  seB1 <- coefs[4,2]
+  betaB4 <- coefs[4,1] + coefs[5,1]
+  seB4 <- sqrt(coefs[4,2]^2 + coefs[5,2]^2 + 2*(covs[5,4]))
+  betaPM1 <- coefs[4,1] + coefs[6,1]
+  sePM1 <- sqrt(coefs[4,2]^2 + coefs[6,2]^2 + 2*(covs[6,4]))
+  cilowerB1 <- betaB1 - (qnorm(0.975)*seB1)
+  ciupperB1 <- betaB1 + (qnorm(0.975)*seB1)
+  cilowerB4 <- betaB4 - (qnorm(0.975)*seB4)
+  ciupperB4 <- betaB4 + (qnorm(0.975)*seB4)
+  cilowerPM1 <- betaPM1 - (qnorm(0.975)*sePM1)
+  ciupperPM1 <- betaPM1 + (qnorm(0.975)*sePM1)
+  vardf <- data.frame(EDC = character(), betaB1 = numeric(), cilowerB1 = numeric(), ciupperB1 = numeric(),
+                    betaB4 = numeric(), cilowerB4 = numeric(), ciupperB4 = numeric(),
+                    betaPM1 = numeric(), cilowerPM1 = numeric(), ciupperPM1 = numeric(),
+                    stringsAsFactors = FALSE)
+  edc <- as.character(var)
+  vardf[1, ] <- list(edc, betaB1, cilowerB1, ciupperB1, betaB4, cilowerB4, ciupperB4, betaPM1, cilowerPM1, ciupperPM1)
+}
+
+# Output for model1: basic model with interaction
+geeres <- list.edcs %>%  
+  lapply(geefun)
+geeresdf <- as.data.frame(do.call(rbind, geeres))
+names(geeresdf) <- c("edc", "betaB1", "cilowerB1", "ciupperB1", "betaB4", "cilowerB4", "ciupperB4", "betaPM1", "cilowerPM1", "ciupperPM1")
+
+geeresdf1kab <- kable(geeresdf, 
+                   caption="Effect of EDC on tBV by Moment", 
+                   digits=3)
+geeresdf1kab
+
+
+# Function for model2 :  model with interaction & potential confounders
+geefun2 <- function(var) {
+  form2 <- as.formula(paste0("log_tBV ~ 0 + moments + ",var," + moments*",var,"+ medu + age*moments + fatp*moments + avgcal*moments + log_cre*moments"))
+  fit_var2 <- geeglm(formula=form2,
+               id=chear_pid, 
+               data=dat2, 
+               family=gaussian(link = "identity"), 
+               corstr="independence", 
+               waves=moments)
+  coefs <- coef(summary(fit_var2)) 
+  covs <- vcov(fit_var2)
+  betaB1 <- coefs[4,1]
+  seB1 <- coefs[4,2]
+  betaB4 <- coefs[4,1] + coefs[10,1]
+  seB4 <- sqrt(coefs[4,2]^2 + coefs[10,2]^2 + 2*(covs[4,10]))
+  betaPM1 <- coefs[4,1] + coefs[11,1]
+  sePM1 <- sqrt(coefs[4,2]^2 + coefs[11,2]^2 + 2*(covs[4,11]))
+  cilowerB1 <- betaB1 - (qnorm(0.975)*seB1)
+  ciupperB1 <- betaB1 + (qnorm(0.975)*seB1)
+  cilowerB4 <- betaB4 - (qnorm(0.975)*seB4)
+  ciupperB4 <- betaB4 + (qnorm(0.975)*seB4)
+  cilowerPM1 <- betaPM1 - (qnorm(0.975)*sePM1)
+  ciupperPM1 <- betaPM1 + (qnorm(0.975)*sePM1)
+  vardf <- data.frame(EDC = character(), betaB1 = numeric(), cilowerB1 = numeric(), ciupperB1 = numeric(),
+                    betaB4 = numeric(), cilowerB4 = numeric(), ciupperB4 = numeric(),
+                    betaPM1 = numeric(), cilowerPM1 = numeric(), ciupperPM1 = numeric(),
+                    stringsAsFactors = FALSE)
+  edc <- as.character(var)
+  vardf[1, ] <- list(edc, betaB1, cilowerB1, ciupperB1, betaB4, cilowerB4, ciupperB4, betaPM1, cilowerPM1, ciupperPM1)
+}
+
+
+# Output for model2:  model with interaction & potential confounders
+geeres2 <- list.edcs %>%  
+  lapply(geefun2)
+geeresdf2 <- as.data.frame(do.call(rbind, geeres2))
+names(geeresdf2) <- c("edc", "betaB1", "cilowerB1", "ciupperB1", "betaB4", "cilowerB4", "ciupperB4", "betaPM1", "cilowerPM1", "ciupperPM1")
+
+geeresdf2kab <- kable(geeresdf2, 
+                   caption="Effect of EDC on tBV by Moment (adjusted for age, fat%, medu, avgcal)", 
+                   digits=3)
+geeresdf2kab
+
+
+# Save table for later formatting 
+geeresdf <- apply(geeresdf,2,as.character)
+geeresdf2 <- apply(geeresdf2,2,as.character)
+write.csv(geeresdf, "Output/Aim1/07132021/gee_tBV_basic.csv")
+write.csv(geeresdf2, "Output/Aim1/07132021/gee_tBV_adj.csv")
+```
+
+## Interaction 
+Using ANOVA to get p-values for interaction between EDC & moments. 
+
+
+```{r gee typeiii}
+
+set.seed(801)
+summary(testfit1)
+summary(testfit2)
+
+# Test the difference in exposure association across time windows with type III test
+
+# Model 1 (with BP3)
+aov1 <- anova(testfit1, test="F")
+aov1_tidy <- as.data.frame(tidy(anova(testfit1, test="F")))
+aov1_tidy
+
+# Model 2 (with BP3)
+aov2 <- anova(testfit2, test="F")
+aov2_tidy <- as.data.frame(tidy(anova(testfit2, test="F")))
+aov2
+```
+
+#### Interpretation
+We also see that the interaction between moments & log_bp3 is NOT significant in the crude (p=0.13) and adjusted (p=0.092), suggesting no time-varying associations. 
+
+
+```{r gee interaction, warning=FALSE}
+set.seed(801)
+# Function test the difference in exposure association across time windows with type III test
+## pFGV 
+geeint1 <- function(var) {
+  form1 <- as.formula(paste0("log_pFGV ~ 0 + moments + ",var," + moments*",var,"+ medu + age*moments + fatp*moments + avgcal*moments + log_cre*moments"))
+  aov_var1 <- geeglm(formula=form1,
+               id=chear_pid, 
+               data=dat2, 
+               family=gaussian(link = "identity"), 
+               corstr="independence", 
+               waves=moments)
+  aovtidy_var1 <- as.data.frame(tidy(anova(aov_var1, test="F")))
+  aov_sub <- aovtidy_var1[8, c(1,4)]
+} 
+geeintres1 <- list.edcs %>%  
+  lapply(geeint1)
+geeintresbind1 <- bind_rows(geeintres1)
+geeintres1kab <- kable(geeintresbind1, 
+                   caption="Significance of interaction between EDC & Tanner Stage on pFGV ", 
+                   digits=3)
+geeintres1kab
+
+## aFGV 
+geeint2 <- function(var) {
+  form2 <- as.formula(paste0("log_aFGV ~ 0 + moments + ",var," + moments*",var,"+ medu + age*moments + fatp*moments + avgcal*moments + log_cre*moments"))
+  aov_var2 <- geeglm(formula=form2,
+               id=chear_pid, 
+               data=dat2, 
+               family=gaussian(link = "identity"), 
+               corstr="independence", 
+               waves=moments)
+  aovtidy_var2 <- as.data.frame(tidy(anova(aov_var2, test="F")))
+  aov_sub <- aovtidy_var2[8, c(1,4)]
+} 
+geeintres2 <- list.edcs %>%  
+  lapply(geeint2)
+geeintresbind2 <- bind_rows(geeintres2)
+geeintres2kab <- kable(geeintresbind2, 
+                   caption="Significance of interaction between EDC & Tanner Stage on aFGV ", 
+                   digits=3)
+geeintres2kab
+
+## tBV 
+geeint3 <- function(var) {
+  form3 <- as.formula(paste0("log_tBV ~ 0 + moments + ",var," + moments*",var,"+ medu + age*moments + fatp*moments + avgcal*moments + log_cre*moments"))
+  aov_var3 <- geeglm(formula=form3,
+               id=chear_pid, 
+               data=dat2, 
+               family=gaussian(link = "identity"), 
+               corstr="independence", 
+               waves=moments)
+  aovtidy_var3 <- as.data.frame(tidy(anova(aov_var3, test="F")))
+  aov_sub <- aovtidy_var3[8, c(1,4)]
+} 
+geeintres3 <- list.edcs %>%  
+  lapply(geeint3)
+geeintresbind3 <- bind_rows(geeintres3)
+geeintres3kab <- kable(geeintresbind3, 
+                   caption="Significance of interaction between EDC & Tanner Stage on tBV ", 
+                   digits=3)
+geeintres3kab
+
+
+# Save table for later formatting 
+write.csv(geeintresbind1, "Output/Aim1/07132021/gee_pfgv_adj_int.csv")
+write.csv(geeintresbind2, "Output/Aim1/07132021/gee_afgv_adj_int.csv")
+write.csv(geeintresbind3, "Output/Aim1/07132021/gee_tbv_adj_int.csv")
+
+```
