@@ -4,5 +4,5 @@
 
 ### Project folder 
 #### Scripts: R markdown files 
-#### Data: Data used in analysis- will be available with publication acceptance 
-#### Figures: Figures produced by this analysis- will be available with publication acceptance 
+#### Data: Data used in analysis- available upon reasonable request to the corresponding author
+#### Figures: Figures produced by this analysis- available with publication acceptance 
